@@ -20,23 +20,24 @@ import (
 )
 
 type Config struct {
-	APIKey             string `json:"api_key"`
-	WorkDir            string `json:"work_dir,omitempty"`
-	ThermostatID       string `json:"thermostat_id"`
-	InfluxServer       string `json:"influx_server"`
-	InfluxOrg          string `json:"influx_org,omitempty"`
-	InfluxUser         string `json:"influx_user,omitempty"`
-	InfluxPass         string `json:"influx_password,omitempty"`
-	InfluxToken        string `json:"influx_token,omitempty"`
-	InfluxBucket       string `json:"influx_bucket"`
-	WriteHeatPump1     bool   `json:"write_heat_pump_1"`
-	WriteHeatPump2     bool   `json:"write_heat_pump_2"`
-	WriteAuxHeat1      bool   `json:"write_aux_heat_1"`
-	WriteAuxHeat2      bool   `json:"write_aux_heat_2"`
-	WriteCool1         bool   `json:"write_cool_1"`
-	WriteCool2         bool   `json:"write_cool_2"`
-	WriteHumidifier    bool   `json:"write_humidifier"`
-	AlwaysWriteWeather bool   `json:"always_write_weather_as_current"`
+	APIKey                    string `json:"api_key"`
+	WorkDir                   string `json:"work_dir,omitempty"`
+	ThermostatID              string `json:"thermostat_id"`
+	InfluxServer              string `json:"influx_server"`
+	InfluxOrg                 string `json:"influx_org,omitempty"`
+	InfluxUser                string `json:"influx_user,omitempty"`
+	InfluxPass                string `json:"influx_password,omitempty"`
+	InfluxToken               string `json:"influx_token,omitempty"`
+	InfluxBucket              string `json:"influx_bucket"`
+	InfluxHealthCheckDisabled bool   `json:"influx_health_check_disabled"`
+	WriteHeatPump1            bool   `json:"write_heat_pump_1"`
+	WriteHeatPump2            bool   `json:"write_heat_pump_2"`
+	WriteAuxHeat1             bool   `json:"write_aux_heat_1"`
+	WriteAuxHeat2             bool   `json:"write_aux_heat_2"`
+	WriteCool1                bool   `json:"write_cool_1"`
+	WriteCool2                bool   `json:"write_cool_2"`
+	WriteHumidifier           bool   `json:"write_humidifier"`
+	AlwaysWriteWeather        bool   `json:"always_write_weather_as_current"`
 }
 
 const (
@@ -136,19 +137,21 @@ func main() {
 	const influxTimeout = 3 * time.Second
 	authString := ""
 	if config.InfluxUser != "" || config.InfluxPass != "" {
-		authString = fmt.Sprintf("%s:%s", config.InfluxUser, config.InfluxPass) 
+		authString = fmt.Sprintf("%s:%s", config.InfluxUser, config.InfluxPass)
 	} else if config.InfluxToken != "" {
 		authString = fmt.Sprintf("%s", config.InfluxToken)
 	}
 	influxClient := influxdb2.NewClient(config.InfluxServer, authString)
-	ctx, cancel := context.WithTimeout(context.Background(), influxTimeout)
-	defer cancel()
-	health, err := influxClient.Health(ctx)
-	if err != nil {
-		log.Fatalf("failed to check InfluxDB health: %v", err)
-	}
-	if health.Status != "pass" {
-		log.Fatalf("InfluxDB did not pass health check: status %s; message '%s'", health.Status, *health.Message)
+	if !config.InfluxHealthCheckDisabled {
+		ctx, cancel := context.WithTimeout(context.Background(), influxTimeout)
+		defer cancel()
+		health, err := influxClient.Health(ctx)
+		if err != nil {
+			log.Fatalf("failed to check InfluxDB health: %v", err)
+		}
+		if health.Status != "pass" {
+			log.Fatalf("InfluxDB did not pass health check: status %s; message '%s'", health.Status, *health.Message)
+		}
 	}
 	influxWriteApi := influxClient.WriteAPIBlocking(config.InfluxOrg, config.InfluxBucket)
 	_ = influxWriteApi
@@ -191,7 +194,7 @@ func main() {
 					demandMgmtOffset := float64(t.ExtendedRuntime.DmOffset[i]) / 10.0
 					hvacMode := t.ExtendedRuntime.HvacMode[i] // string :(
 					heatPump1RunSec := t.ExtendedRuntime.HeatPump1[i]
-					heatPump2RunSec := t.ExtendedRuntime.HeatPump1[i]
+					heatPump2RunSec := t.ExtendedRuntime.HeatPump2[i]
 					auxHeat1RunSec := t.ExtendedRuntime.AuxHeat1[i]
 					auxHeat2RunSec := t.ExtendedRuntime.AuxHeat2[i]
 					cool1RunSec := t.ExtendedRuntime.Cool1[i]
@@ -342,10 +345,12 @@ func main() {
 				visibilityMeters := t.Weather.Forecasts[0].Visibility
 				visibilityMiles := float64(visibilityMeters) / 1609.34
 				windChill := WindChill(outdoorTemp, float64(windspeedMph))
+				weatherSymbol := t.Weather.Forecasts[0].WeatherSymbol
+				sky := t.Weather.Forecasts[0].Sky
 
 				fmt.Printf("Weather at %s:\n", weatherTime)
-				fmt.Printf("\ttemperature: %.1f degF\n\tpressure: %d mb\n\thumidity: %d%%\n\tdew point: %.1f degF\n\twind: %d at %d mph\n\twind chill: %.1f degF\n\tvisibility: %.1f miles\n",
-					outdoorTemp, pressureMillibar, outdoorHumidity, dewpoint, windBearing, windspeedMph, windChill, visibilityMiles)
+				fmt.Printf("\ttemperature: %.1f degF\n\tpressure: %d mb\n\thumidity: %d%%\n\tdew point: %.1f degF\n\twind: %d at %d mph\n\twind chill: %.1f degF\n\tvisibility: %.1f miles\nweather symbol: %d\nsky: %d",
+					outdoorTemp, pressureMillibar, outdoorHumidity, dewpoint, windBearing, windspeedMph, windChill, visibilityMiles, weatherSymbol, sky)
 
 				if weatherTime != lastWrittenWeather || config.AlwaysWriteWeather {
 					if err := retry.Do(func() error {
@@ -370,6 +375,8 @@ func main() {
 									"visibility_mi":                   visibilityMiles,
 									"recommended_max_indoor_humidity": IndoorHumidityRecommendation(outdoorTemp),
 									"wind_chill_f":                    windChill,
+									"weather_symbol":                  weatherSymbol,
+									"sky":                             sky,
 								},
 								pointTime,
 							))
