@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
-	github.com/cdzombak/libwx v1.4.0
+	github.com/cdzombak/libwx v1.5.0
 	github.com/golang/glog v1.2.5
 	github.com/influxdata/influxdb-client-go/v2 v2.14.0
 	golang.org/x/oauth2 v0.36.0
